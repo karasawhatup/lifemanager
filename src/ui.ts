@@ -275,8 +275,9 @@ function grid(blocks: ScheduleBlock[], logs: ReturnType<typeof dayLogs>, isToday
       const gutter = 58;
       const right = 10;
       const gap = 6;
-      const width = `calc((100% - ${gutter + right}px - ${(cols - 1) * gap}px) / ${cols})`;
-      const left = `calc(${gutter}px + ${col} * ((100% - ${gutter + right}px - ${(cols - 1) * gap}px) / ${cols} + ${gap}px))`;
+      const span = gutter + right + (cols - 1) * gap;
+      const width = `calc((100% - ${span}px) / ${cols})`;
+      const left = col === 0 ? `${gutter}px` : `calc(${gutter + col * gap}px + (100% - ${span}px) * ${col} / ${cols})`;
       const live = isToday && start <= now && now < end;
       return `<button type="button" class="block st-${block.status}${height < 46 ? " compact" : ""}${live ? " is-now" : ""}" data-cat="${esc(block.category)}" data-action="block" data-id="${esc(block.id)}" style="top:${top}px;height:${height}px;width:${width};left:${left};--edge:${edge(block.category)}" aria-label="${esc(block.title)} ${esc(block.start_time)}から${esc(block.end_time)} ${statusLabel(block.status)}">
         <span class="block-cat">${esc(categoryLabel(block.category))}</span>
