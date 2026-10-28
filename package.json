@@ -1,0 +1,22 @@
+{
+  "name": "lifemanager",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "@fontsource/outfit": "^5.2.5",
+    "@supabase/supabase-js": "^2.81.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
