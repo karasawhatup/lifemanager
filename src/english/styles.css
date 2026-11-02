@@ -677,6 +677,18 @@ a { color: var(--md-sys-color-primary); }
   .stat-grid { grid-template-columns: repeat(4, 1fr); }
   .stat-grid.three { grid-template-columns: repeat(3, 1fr); }
 }
+.voice-field { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.voice-field span { font-size: 12px; font-weight: 500; letter-spacing: 0.5px; color: var(--md-sys-color-on-surface-variant); }
+.voice-field select {
+  font: inherit;
+  font-size: 16px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+}
 .launch { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 16px; }
 .launch .btn { width: 100%; }
 .later { margin-top: 28px; }

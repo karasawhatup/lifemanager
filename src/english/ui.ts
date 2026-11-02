@@ -22,7 +22,7 @@ import {
 import { emit, state } from "./state";
 import { scenarioLabel } from "./catalog";
 import { bindSpeaking, handleSpeakingAction, pronunciationPage, speakingPage } from "./speaking-ui";
-import { stopSpeaking } from "./realtime";
+import { stopSpeaking } from "./conversation";
 import { paintToast, showToast } from "./toast";
 import { addDays, formatStamp, shortMonthDay, tokyoDate, weekdayOf } from "../time";
 import type {

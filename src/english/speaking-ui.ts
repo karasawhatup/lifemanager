@@ -17,8 +17,25 @@ import {
   tipsForAttempt,
   errorLabel,
 } from "./catalog";
+import {
+  abortSpeaking,
+  hasRecording,
+  listenAndReply,
+  primeSpeech,
+  recognitionSupported,
+  rememberRate,
+  rememberVoice,
+  replayLine,
+  scoreUtterance,
+  sendTyped,
+  speakingBusy,
+  startSpeaking,
+  stopListening,
+  stopSpeaking,
+  synthesisSupported,
+  voiceChoices,
+} from "./conversation";
 import { cancelPronunciation, startPronunciation } from "./pronounce";
-import { abortSpeaking, micSupported, speakingBusy, startSpeaking, stopSpeaking } from "./realtime";
 import { emit, state } from "./state";
 import { showToast } from "./toast";
 import { formatStamp, shortMonthDay, tokyoDate } from "../time";
@@ -62,7 +79,7 @@ export function speakingPage(): string {
   const showLive = locked || state.speakPhase === "error" || lines.length > 0;
   return `<section class="section">
     <h2>AIと話す</h2>
-    <p class="supporting">声で英語を続けます。目立つ誤りは一度だけ直して、会話は止めません。終了後に、よかった点と覚える表現が残ります。</p>
+    <p class="supporting">一文ずつ英語で話します。目立つ誤りは一度だけ直して、会話は止めません。返事は Gemini の無料枠、声はブラウザの読み上げです。</p>
     ${banners("speak")}
     <p class="field-label">場面</p>
     <div class="chips" role="toolbar">
@@ -80,7 +97,8 @@ export function speakingPage(): string {
     <div class="chips" role="toolbar">
       ${SPEAK_MINUTES.map((minutes) => chip("pick-minutes", String(minutes), `${minutes}分`, state.speakMaxMinutes === minutes, locked)).join("")}
     </div>
-    <p class="hint">初期値は10分です。過ぎると自動で終わり、マイクも止まります。OpenAI の音声は使った分だけ課金されます。iPhone は Safari で開いてください。</p>
+    ${voiceControls(locked)}
+    <p class="hint">初期値は10分です。過ぎると自動で終わります。Gemini の無料枠には回数の上限があり、超えると画面にその旨が出ます。発音の採点だけ Azure を使います。iPhone では、AI の声が自動で鳴らないときに「聞く」を押してください。</p>
     ${locked ? "" : `<button type="button" class="btn filled" data-action="speak-start">${state.mode === "demo" ? "見本の会話を見る" : "会話を始める"}</button>`}
     ${showLive ? livePanel(lines, locked) : ""}
     ${state.speakShowSample && (state.mode === "demo" || state.speakingSchema) ? sessionCard(sampleSpeakingSession(), true) : ""}
@@ -102,14 +120,40 @@ function banners(which: "speak" | "pron"): string {
   if (which === "pron" && state.mode === "demo") {
     parts.push(`<p class="banner">デモモードです。マイクと Azure にはつながりません。ボタンを押すと、採点結果の見本が出ます。</p>`);
   }
-  if (which === "speak" && state.mode === "live" && !micSupported()) {
-    parts.push(`<p class="banner error">このブラウザはマイクか WebRTC に対応していません。iPhone は Safari で開いてください。</p>`);
+  if (which === "speak" && state.mode === "live" && !recognitionSupported()) {
+    parts.push(
+      `<p class="banner">このブラウザは音声認識に対応していません。Firefox などが該当します。英語を打って送れば、会話はそのまま続けられます。読み上げは使えることがあります。</p>`,
+    );
   }
   return parts.join("");
 }
 
+function voiceControls(locked: boolean): string {
+  if (!synthesisSupported() && state.mode === "demo") {
+    return `<p class="field-label">読み上げ</p><p class="hint">声と速さは、ブラウザの読み上げが使える端末で選べます。</p>`;
+  }
+  const voices = voiceChoices();
+  const options = [`<option value=""${!state.speakVoice ? " selected" : ""}>自動（英語）</option>`]
+    .concat(voices.map((voice) => `<option value="${esc(voice.uri)}"${voice.uri === state.speakVoice ? " selected" : ""}>${esc(voice.label)}</option>`))
+    .join("");
+  const rates = [
+    { id: "0.85", label: "ゆっくり" },
+    { id: "1", label: "ふつう" },
+    { id: "1.15", label: "速め" },
+  ];
+  return `<p class="field-label">読み上げ</p>
+    <label class="voice-field"><span>声</span><select id="speak-voice"${locked ? " disabled" : ""}>${options}</select></label>
+    <div class="chips" role="toolbar">
+      ${rates.map((rate) => chip("pick-rate", rate.id, rate.label, String(state.speakRate) === rate.id, locked)).join("")}
+    </div>`;
+}
+
 function livePanel(lines: TranscriptLine[], locked: boolean): string {
   const empty = lines.length ? "" : `<p class="supporting">ここに、自分と AI の英語が出ます。</p>`;
+  const demo = state.mode === "demo";
+  const listening = state.speakListening;
+  const talk = !demo && recognitionSupported() && state.speakPhase === "live";
+  const typing = !demo && state.speakPhase === "live";
   return `<article class="card live-card">
     <div class="meta-row">
       <span class="status wait" data-speak-status>${esc(state.speakStatus || (locked ? "接続しています" : ""))}</span>
@@ -117,20 +161,37 @@ function livePanel(lines: TranscriptLine[], locked: boolean): string {
     </div>
     <div class="transcript" aria-live="polite">
       ${empty}
-      ${lines.map((line) => lineHtml(line, false, null)).join("")}
+      ${lines.map((line) => lineHtml(line, state.speakPhase === "live" && !demo, null)).join("")}
       <p class="line partial" data-speak-partial${state.speakPartial ? "" : " hidden"}>${esc(state.speakPartial)}</p>
     </div>
-    ${locked ? `<div class="card-actions"><button type="button" class="btn filled" data-action="speak-stop"${state.speakPhase === "wrapping" ? " disabled" : ""}>${state.speakPhase === "wrapping" ? "まとめています" : "終了"}</button></div>` : `<p class="hint">自分の文の発音は、下の記録からチェックできます。会話の音声はそのまま採点せず、もう一度読みます。</p>`}
+    ${
+      talk
+        ? `<div class="card-actions"><button type="button" class="btn filled" data-action="${listening ? "speak-listen-stop" : "speak-talk"}"${state.speakPhase === "wrapping" ? " disabled" : ""}>${listening ? "聞き取りを止める" : "話す"}</button></div>`
+        : ""
+    }
+    ${
+      typing
+        ? `<label class="text-field"><textarea id="speak-input" rows="2" maxlength="1500" placeholder=" "${listening || state.speakPhase === "wrapping" ? " disabled" : ""}>${esc(state.speakInput)}</textarea><span>英語を打って送る</span></label>
+           <div class="card-actions"><button type="button" class="btn tonal" data-action="speak-send"${listening || state.speakPhase === "wrapping" ? " disabled" : ""}>送る</button></div>`
+        : ""
+    }
+    ${locked ? `<div class="card-actions"><button type="button" class="btn filled" data-action="speak-stop"${state.speakPhase === "wrapping" ? " disabled" : ""}>${state.speakPhase === "wrapping" ? "まとめています" : "終了"}</button></div>` : `<p class="hint">話した直後は、その録音をそのまま採点できます。録音が残っていない文は、発音の画面でもう一度読みます。</p>`}
   </article>`;
 }
 
-function lineHtml(line: TranscriptLine, check: boolean, sessionId: string | null): string {
+function lineHtml(line: TranscriptLine, live: boolean, sessionId: string | null): string {
   const who = line.role === "user" ? "自分" : "AI";
-  const button =
-    check && line.role === "user"
-      ? `<button type="button" class="btn text" data-action="check-line" data-session="${esc(sessionId ?? "")}" data-text="${esc(line.text)}">発音をチェック</button>`
+  const hear =
+    live && line.role === "assistant" && line.id
+      ? `<button type="button" class="btn text" data-action="speak-hear" data-id="${esc(line.id)}">聞く</button>`
       : "";
-  return `<div class="line ${line.role}"><span class="who">${who}</span><p>${esc(line.text)}</p>${button}</div>`;
+  const score =
+    line.role === "user" && line.text
+      ? hasRecording(line.id)
+        ? `<button type="button" class="btn text" data-action="score-line" data-id="${esc(line.id ?? "")}" data-session="${esc(sessionId ?? "")}" data-text="${esc(line.text)}">この発話を採点</button>`
+        : `<button type="button" class="btn text" data-action="check-line" data-session="${esc(sessionId ?? "")}" data-text="${esc(line.text)}">発音をチェック</button>`
+      : "";
+  return `<div class="line ${line.role}"><span class="who">${who}</span><p>${esc(line.text)}</p>${hear}${score}</div>`;
 }
 
 function sessionCard(row: SpeakingSession, preview: boolean): string {
@@ -156,7 +217,7 @@ function sessionCard(row: SpeakingSession, preview: boolean): string {
 function sessionBody(row: SpeakingSession, preview: boolean): string {
   const feedback = row.feedback;
   return `<div class="transcript">
-      ${row.transcript.map((line) => lineHtml(line, !speakingBusy(), preview ? null : row.id)).join("")}
+      ${row.transcript.map((line) => lineHtml(line, false, preview ? null : row.id)).join("")}
     </div>
     ${
       feedback
@@ -360,6 +421,14 @@ function problemList(rows: PronunciationAttempt[]): string {
   return `${words ? `<h3 class="subhead">単語</h3><ul class="tips">${words}</ul>` : ""}${phonemes ? `<h3 class="subhead">音素</h3><ul class="tips">${phonemes}</ul>` : ""}`;
 }
 
+function queueReread(text: string, sessionId: string | null): void {
+  state.pronMode = "read_aloud";
+  state.pronReference = text.slice(0, 500);
+  state.pronSentenceId = "";
+  state.pronSessionId = sessionId;
+  go("pronunciation");
+}
+
 function go(screen: "speaking" | "pronunciation"): void {
   state.screen = screen;
   state.menuOpen = false;
@@ -374,11 +443,20 @@ export function bindSpeaking(): void {
     const target = event.target;
     if (!(target instanceof HTMLTextAreaElement)) return;
     if (target.id === "speak-topic") state.speakTopic = target.value;
+    if (target.id === "speak-input") state.speakInput = target.value;
     if (target.id === "pron-reference") {
       state.pronReference = target.value;
       if (starterById(state.pronSentenceId)?.text !== target.value) state.pronSentenceId = "";
     }
   });
+  document.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement) || target.id !== "speak-voice") return;
+    rememberVoice(target.value);
+  });
+  if (synthesisSupported()) {
+    window.speechSynthesis.addEventListener("voiceschanged", () => emit());
+  }
   window.addEventListener("pagehide", () => abortSpeaking());
 }
 
@@ -404,12 +482,52 @@ export async function handleSpeakingAction(action: string, el: HTMLElement): Pro
     emit();
     return true;
   }
+  if (action === "pick-rate") {
+    const rate = Number(el.dataset.value);
+    if (busy()) return true;
+    rememberRate(rate);
+    emit();
+    return true;
+  }
   if (action === "speak-start") {
+    primeSpeech();
     await startSpeaking();
     return true;
   }
   if (action === "speak-stop") {
     await stopSpeaking("user");
+    return true;
+  }
+  if (action === "speak-talk") {
+    primeSpeech();
+    await listenAndReply();
+    return true;
+  }
+  if (action === "speak-listen-stop") {
+    stopListening();
+    return true;
+  }
+  if (action === "speak-send") {
+    primeSpeech();
+    await sendTyped();
+    return true;
+  }
+  if (action === "speak-hear") {
+    primeSpeech();
+    replayLine(el.dataset.id ?? "");
+    return true;
+  }
+  if (action === "score-line") {
+    if (state.speakListening || state.speakPhase === "wrapping") {
+      showToast("聞き取りが終わってから採点できます");
+      return true;
+    }
+    const text = (el.dataset.text ?? "").trim();
+    const id = el.dataset.id ?? "";
+    if (!text || !id) return true;
+    const sessionId = el.dataset.session && !isPreviewId(el.dataset.session) ? el.dataset.session : null;
+    const scored = await scoreUtterance(id, text, sessionId);
+    if (scored) go("pronunciation");
     return true;
   }
   if (action === "toggle-session") {
@@ -423,18 +541,14 @@ export async function handleSpeakingAction(action: string, el: HTMLElement): Pro
     return true;
   }
   if (action === "check-line") {
-    if (speakingBusy()) {
-      showToast("先に会話を終了してください");
+    if (state.speakListening || state.speakPhase === "wrapping" || state.speakPhase === "connecting") {
+      showToast("聞き取りが終わってから発音をチェックできます");
       return true;
     }
     const text = (el.dataset.text ?? "").trim();
     if (!text) return true;
-    state.pronMode = "read_aloud";
-    state.pronReference = text.slice(0, 500);
-    state.pronSentenceId = "";
-    const sessionId = el.dataset.session ?? "";
-    state.pronSessionId = sessionId && !isPreviewId(sessionId) ? sessionId : null;
-    go("pronunciation");
+    const sessionId = el.dataset.session && !isPreviewId(el.dataset.session) ? el.dataset.session : null;
+    queueReread(text, sessionId);
     showToast("この文を、もう一度マイクに向かって読んでください");
     return true;
   }

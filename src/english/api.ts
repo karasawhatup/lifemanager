@@ -869,7 +869,7 @@ export async function savePronunciation(input: PronunciationInput): Promise<{ ok
 }
 
 export async function invokeFunction(
-  name: "realtime-session" | "speech-token",
+  name: "conversation-reply" | "speech-token",
   body: unknown,
 ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string; status: number }> {
   if (!supabase || state.mode !== "live") return { ok: false, error: "デモモードです", status: 0 };
