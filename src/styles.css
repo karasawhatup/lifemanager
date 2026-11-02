@@ -525,7 +525,9 @@ textarea { min-height: 96px; resize: vertical; }
   border-radius: 14px;
   padding: 10px 12px;
   min-height: 56px;
+  text-decoration: none;
 }
+.drawer-sep { height: 1px; margin: 8px 4px; background: var(--line); }
 .nav-item strong { display: block; font-size: 15px; font-weight: 600; }
 .nav-item small { display: block; margin-top: 2px; color: var(--faint); font-size: 12px; }
 .nav-item.active {

@@ -192,6 +192,10 @@ function drawer(): string {
         </button>`,
       )
       .join("")}
+    <div class="drawer-sep"></div>
+    <a class="nav-item" href="./english/">
+      <span><strong>英語学習</strong><small>表現、教材、作文、課題</small></span>
+    </a>
     <div class="drawer-foot">Asia/Tokyo</div>
   </nav>`;
 }

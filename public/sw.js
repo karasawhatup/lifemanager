@@ -1,5 +1,5 @@
 /* LIFEMANAGER app shell. Bump CACHE when the offline behavior should reset. */
-const CACHE = "lifemanager-v1";
+const CACHE = "lifemanager-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -13,6 +13,9 @@ self.addEventListener("install", (event) => {
           "./config.js",
           "./icons/icon-192.png",
           "./icons/apple-touch-icon.png",
+          "./english/",
+          "./english/index.html",
+          "./english/manifest.webmanifest",
         ]),
       )
       .then(() => self.skipWaiting())

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 // Relative base so the same build works on GitHub project pages
@@ -7,6 +8,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     assetsDir: "assets",
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        english: fileURLToPath(new URL("./english/index.html", import.meta.url)),
+      },
+    },
   },
   server: {
     host: "127.0.0.1",

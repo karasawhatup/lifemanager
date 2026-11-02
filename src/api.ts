@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { readConfig } from "./config";
 import { clearDemo, loadDemo, saveDemo, seedBundle } from "./demo";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { isCategory } from "./labels";
@@ -36,14 +37,7 @@ let realtimeChannel: ReturnType<SupabaseClient["channel"]> | null = null;
 let authReady = false;
 let reloadTimer = 0;
 
-export function readConfig(): { url: string; anonKey: string; live: boolean } {
-  const fromWindow = window.LIFEMANAGER_CONFIG;
-  const url = (fromWindow?.supabaseUrl || import.meta.env.VITE_SUPABASE_URL || "").trim();
-  const anonKey = (fromWindow?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_ANON_KEY || "").trim();
-  const placeholder = /your_|xxx|example/i.test(url) || /your_|xxx/i.test(anonKey);
-  const live = /^https?:\/\//.test(url) && anonKey.length >= 20 && !placeholder;
-  return { url, anonKey, live };
-}
+export { readConfig };
 
 function bundleFromState(): Bundle {
   if (!state.settings) throw new Error("settings missing");
