@@ -194,7 +194,7 @@ function drawer(): string {
       .join("")}
     <div class="drawer-sep"></div>
     <a class="nav-item" href="./english/">
-      <span><strong>英語学習</strong><small>表現、教材、作文、課題</small></span>
+      <span><strong>英語学習</strong><small>会話、発音、表現、作文</small></span>
     </a>
     <div class="drawer-foot">Asia/Tokyo</div>
   </nav>`;

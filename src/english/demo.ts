@@ -1,11 +1,14 @@
 import { addDays, todayTokyo, tokyoStamp } from "../time";
+import { samplePronunciation, sampleSpeakingSession } from "./catalog";
 import type {
   Assignment,
   EnglishBundle,
   Essay,
   Expression,
+  PronunciationAttempt,
   Question,
   Resource,
+  SpeakingSession,
 } from "./types";
 
 const STORAGE_KEY = "lifemanager.english.demo.v1";
@@ -186,7 +189,13 @@ export function seedEnglish(now = new Date()): EnglishBundle {
     },
   ];
 
-  return { expressions, resources, questions, essays, assignments };
+  const speaking: SpeakingSession[] = [sampleSpeakingSession(now, crypto.randomUUID())];
+  const pronunciation: PronunciationAttempt[] = samplePronunciation(now).map((row) => ({
+    ...row,
+    id: crypto.randomUUID(),
+  }));
+
+  return { expressions, resources, questions, essays, assignments, speaking, pronunciation };
 }
 
 function isBundle(value: unknown): value is EnglishBundle {
@@ -201,12 +210,28 @@ function isBundle(value: unknown): value is EnglishBundle {
   );
 }
 
+function withSpeaking(bundle: EnglishBundle, now = new Date()): EnglishBundle {
+  const seeded = seedEnglish(now);
+  return {
+    ...bundle,
+    speaking: Array.isArray(bundle.speaking) ? bundle.speaking : seeded.speaking,
+    pronunciation: Array.isArray(bundle.pronunciation) ? bundle.pronunciation : seeded.pronunciation,
+  };
+}
+
 export function loadEnglishDemo(): EnglishBundle {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
-      if (isBundle(parsed)) return parsed;
+      if (isBundle(parsed)) {
+        const next = withSpeaking(parsed);
+        const rawBundle = parsed as Partial<EnglishBundle>;
+        if (!Array.isArray(rawBundle.speaking) || !Array.isArray(rawBundle.pronunciation)) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        }
+        return next;
+      }
     }
   } catch {
     /* 壊れていたらサンプルを入れ直す */

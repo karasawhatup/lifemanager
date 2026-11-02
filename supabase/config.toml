@@ -1,0 +1,13 @@
+# Supabase CLI が Edge Function をデプロイするための設定。
+# API キーも service_role も、ここには書かない。
+project_id = "lifemanager"
+
+# ゲートウェイの JWT 検査はオフ。ブラウザの事前リクエストと、新しい署名形式の
+# ユーザートークンを通すため。各関数の中で auth.getUser によりログインを確認する。
+# 未ログインには 401 を返し、API キーは返さない。
+
+[functions.realtime-session]
+verify_jwt = false
+
+[functions.speech-token]
+verify_jwt = false

@@ -35,7 +35,9 @@
 
 | 画面 | 何をするか |
 | --- | --- |
-| ホーム | 今日の学習、未対応の件数（未回答の質問、添削待ちの作文、フィードバック待ち）、未提出の課題 |
+| ホーム | 今日の学習、未対応の件数（未回答の質問、添削待ちの作文、フィードバック待ち）、未提出の課題。会話と発音への入口 |
+| 会話 | AI と声で英語を話す。場面とレベルを選び、文字起こしとフィードバックを残す |
+| 発音 | 文の読み上げか、台本なしの自由発話を採点する。点数の推移と、よくずれる音 |
 | 表現 | 使った単語や表現。表現、意味、例文、タグ、日付 |
 | 教材 | 学習に使った記事・動画・その他の URL。タイトル、種類、メモ、日付、誰が追加したか |
 | 質問 | 文法や表現の質問。状態は `open`（未回答）か `answered`（回答済み）。答えはあとから入る |
@@ -48,7 +50,135 @@
 
 ## デモモード
 
-`public/config.js` の URL と鍵が空なら、デモモードです。サンプルの表現、教材、質問、作文、課題が、そのブラウザの中だけに保存されます。サーバーには送られません。右上のメニューの **サンプルに戻す** で最初の状態に戻せます。予定アプリの「サンプルに戻す」とは別です。
+`public/config.js` の URL と鍵が空なら、デモモードです。サンプルの表現、教材、質問、作文、課題、会話、発音が、そのブラウザの中だけに保存されます。サーバーには送られません。右上のメニューの **サンプルに戻す** で最初の状態に戻せます。予定アプリの「サンプルに戻す」とは別です。
+
+デモモードの会話と発音は見本です。マイクも、OpenAI も、Azure も使いません。画面にはその旨が出ます。鍵を入れたあとの結果の見た目を確認するためのものです。
+
+## スピーキングを有効にする
+
+会話は [OpenAI Realtime API](https://developers.openai.com/api/docs/guides/realtime) の音声、発音は [Azure AI Speech の発音評価](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-pronunciation-assessment) です。どちらも使った分だけ課金されます。無料の枠は小さく、放置すると料金がかかります。会話は画面の上限（初期値 10 分。5 / 10 / 15 / 20 分から選べます）で自動的に切れ、経過時間を表示します。タブを閉じるとマイクも止まります。
+
+API キーはブラウザにも `config.js` にもリポジトリにも置きません。Supabase の Edge Function だけが鍵を持ち、ログイン済みのユーザーに、短いトークンだけを返します。
+
+一度だけ、次をやります。CLI は入れなくてよいです。
+
+### 1. SQL を実行する
+
+1. [Supabase](https://supabase.com) で、いま LIFEMANAGER に使っているプロジェクトを開く。
+2. **SQL Editor** → **New query**。
+3. [`supabase/english_speaking_schema.sql`](../supabase/english_speaking_schema.sql) を開き、中身を**全部**貼り付けて **Run**。
+4. **Table Editor** に次の2つが増える。
+   - `eng_speaking_sessions` 会話
+   - `eng_pronunciation_attempts` 発音
+5. 最後に publication が無いという notice が出たときだけ、**Database → Publications** でこの2つの表を有効にする。
+
+この SQL は、予定の表も、すでにある `eng_expressions` などの表も、中のデータも変更しません。もう一度 Run しても、入っている記録は消えません。
+
+### 2. OpenAI の API キー
+
+1. [OpenAI の API keys](https://platform.openai.com/api-keys) を開く。
+2. **Create new secret key**。名前は `lifemanager-speaking` などでよい。
+3. 表示された `sk-` で始まる鍵を、パスワード管理の場所に控える。この画面を閉じると、もう一度は表示されません。
+4. 課金の支払い方法が OpenAI に無いと、Realtime API は動きません。組織の **Billing** で確認します。
+
+アプリが使うモデルは `gpt-realtime-2.1`、声は `marin` です。ブラウザは鍵そのものではなく、約2分で失効する `ek_` トークンだけを受け取り、`POST https://api.openai.com/v1/realtime/calls` で WebRTC 接続します。トークンの発行は Edge Function が `POST https://api.openai.com/v1/realtime/client_secrets` で行います。
+
+### 3. Azure Speech のキー（無料の F0）
+
+1. [Azure Portal](https://portal.azure.com) を開く。アカウントが無ければ無料で作れます。
+2. **リソースの作成** → **Speech**（または AI services の Speech）を検索する。
+3. 次で作成する。
+   - サブスクリプション: 自分のもの
+   - リソースグループ: 新規で `lifemanager` など
+   - リージョン: **Japan East** があればそれ。無料の F0 が Japan East に無いときは **East US**
+   - 名前: `lifemanager-speech`
+   - 価格レベル: **Free F0**。月に数時間までの上限があります。超えると使えなくなるか、有料の S0 に変えないと続きません
+4. 作成が終わったら、そのリソースの **キーとエンドポイント** を開く。
+   - **キー 1** を控える。これが `AZURE_SPEECH_KEY`。
+   - リージョン名を控える。Japan East なら `japaneast`、East US なら `eastus`。画面の場所名ではなく、この短い英字です。これが `AZURE_SPEECH_REGION`。
+5. キーはリポジトリに貼らない。
+
+発音はブラウザの Speech SDK が、約10分で失効するトークンで `en-US` を採点します。関数は `POST https://<region>.api.cognitive.microsoft.com/sts/v1.0/issueToken` を呼び、キー自体は返しません。
+
+### 4. Supabase のアクセストークンとプロジェクト ID
+
+1. [Supabase のアクセストークン](https://supabase.com/dashboard/account/tokens) を開く。
+2. **Generate new token**。名前は `lifemanager-github` などでよい。出たトークンを控える。これが `SUPABASE_ACCESS_TOKEN`。アカウントに紐づく強い権限なので、GitHub の秘密以外には置かない。
+3. プロジェクトの **Project Settings → General** を開く。**Reference ID** をコピーする。英小文字と数字で20文字です。`public/config.js` の URL `https://この部分.supabase.co` のホスト名と同じです。これが `SUPABASE_PROJECT_REF`。
+
+`service_role` キーは、この作業では使いません。GitHub の秘密にも入れません。
+
+### 5. GitHub の Actions 秘密に入れる
+
+リポジトリの **Settings → Secrets and variables → Actions → New repository secret**。名前は一字一句このとおりです。
+
+| 名前 | 中身 |
+| --- | --- |
+| `SUPABASE_ACCESS_TOKEN` | 手順4のアクセストークン |
+| `SUPABASE_PROJECT_REF` | 手順4の Reference ID |
+| `OPENAI_API_KEY` | 手順2の `sk-` の鍵 |
+| `AZURE_SPEECH_KEY` | 手順3のキー 1 |
+| `AZURE_SPEECH_REGION` | `japaneast` や `eastus` |
+
+値はリポジトリのファイルには書きません。
+
+### 6. 関数をデプロイする
+
+1. この変更が `main` に入っていること。入っていないと、ワークフローのファイルがまだありません。
+2. GitHub の **Actions** → **Deploy speaking functions** → **Run workflow** → `main` を選んで実行。
+3. 緑になれば、`realtime-session` と `speech-token` がデプロイされ、上の3つの API 秘密が Supabase の関数秘密に入っています。ログに鍵の値は出しません。
+4. 秘密が空のまま実行すると、デプロイはせずに終わります。秘密を入れてから、もう一度 **Run workflow** します。
+5. 関数のファイルを `main` に push したときも、秘密が揃っていれば同じワークフローが動きます。
+
+ワークフローは [`.github/workflows/speaking-functions.yml`](../.github/workflows/speaking-functions.yml) です。Supabase CLI は GitHub Actions の中だけで動きます。
+
+### 7. 画面で試す
+
+1. GitHub Pages の Deploy が終わった `https://karasawhatup.github.io/lifemanager/english/` を開く。
+2. 予定アプリと同じメールアドレスとパスワードでログインする。
+3. **会話** で場面とレベルを選び、**会話を始める**。ブラウザがマイクを聞いてきたら許可する。上限の時間と、経過時間が出ます。終了すると、文字起こしとフィードバックが残り、表現は **表現メモに追加** で今の表現リストに入ります。
+4. **発音** で文を選び、**録音して採点**。点数、色のついた単語と音素、日本語のヒント、折れ線、よくずれる音が出ます。
+
+iPhone は Safari で開きます。ホーム画面に追加したあとも、最初にマイクを許可します。LINE などのアプリ内ブラウザでは、マイクが使えないことが多いです。サイレントスイッチがオンだと、AI の声が聞こえないことがあります。
+
+## 会話と発音の画面
+
+スマホは下のナビゲーション（項目が多いので横にずれます）、横幅 600px 以上は左のレールです。会話と発音に、右下の ＋ はありません。
+
+| 場面 | 値 |
+| --- | --- |
+| フリートーク | `free_talk` |
+| 日常生活 | `daily_life` |
+| 大学生活 | `campus_life` |
+| 旅行 | `travel` |
+| 就職面接 | `job_interview` |
+| 自分で決める | `custom`（話題が必須） |
+
+レベルは `a2`（初級）、`b1`（中級）、`b2`（上級）です。
+
+会話の `transcript` は `{role, text, at}` の配列です。`role` は `user` か `assistant`。`feedback` は次の形です。
+
+```json
+{
+  "good_points": ["日本語"],
+  "mistakes": [{ "original": "学習者の英文", "correction": "自然な英文", "note": "短い日本語" }],
+  "expressions": [{ "term": "表現", "meaning": "意味", "example": "例文" }]
+}
+```
+
+発音の `mode` は `read_aloud`（台本あり）か `unscripted`（台本なし）です。`words` は `{word, accuracy, error_type, phonemes:[{phoneme, accuracy}]}` です。`error_type` には `None`、`Mispronunciation`、`Omission`、`Insertion` などが出ます。点数は 0 から 100 です。`source` が `conversation` の行は、会話の文を発音画面でもう一度読んだ記録です。会話中の音声そのものは Azure に送りません。マイクを会話が使っているためです。
+
+読み上げ用の文は、L/R、TH、V/B、F/H、母音、強勢、リンキングを含みます。自由発話は参照文なしで、Azure が聞き取った内容を採点します。完全さは出ないことがあります。音素の詳細は `en-US` です。
+
+## 困ったとき（スピーキング）
+
+- 会話も発音も見本しか出ない: デモモードか、関数がまだ無いか、鍵が違う。上の手順 5 と 6 を確認する。`config.js` は空に戻さない。anon key 以外は書かない。
+- 「表がまだありません」: 手順 1 の SQL がまだ。既存の英語の画面は、この SQL の前でも使える。
+- マイクが使えない: サイトの許可、Safari、サイレントスイッチ。`http://` の素の IP ではマイクは使えません。GitHub Pages は https です。
+- トークンのエラー: OpenAI の支払い方法、Azure のキーとリージョン名（`japaneast` のように英字だけ）。関数のログは Supabase の **Edge Functions → Logs**。
+- 10分で切れる: 画面の上限です。20分より長くは選べません。
+
+会話の記録が画面に出ないときは、他の表と同じで `owner_id` がログイン中のユーザーと違います。
 
 ## 誰が何を書くか
 
@@ -95,7 +225,7 @@ Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY
 
 ### チューター
 
-5つの表を読んで、質問・課題・表現・URL・作文のどれにも書けます。朝は次を見ると、未対応が分かります。
+5つの表に加えて、会話と発音も読めます。質問・課題・表現・URL・作文のどれにも書けます。朝は次を見ると、未対応と、直近の話し方・発音が分かります。レッスンは、会話の `feedback.mistakes` と、発音で繰り返し低い音素から組んでください。
 
 ```bash
 scripts/eng.sh GET 'eng_open_questions?owner_id=eq.$OWNER_ID&order=created_at.asc'
@@ -104,6 +234,17 @@ scripts/eng.sh GET 'eng_unsubmitted_assignments?owner_id=eq.$OWNER_ID&order=due_
 scripts/eng.sh GET 'eng_submitted_assignments?owner_id=eq.$OWNER_ID&order=submitted_at.asc'
 scripts/eng.sh GET 'eng_today_expressions?owner_id=eq.$OWNER_ID&order=created_at.desc'
 scripts/eng.sh GET 'eng_today_resources?owner_id=eq.$OWNER_ID&order=created_at.desc'
+scripts/eng.sh GET 'eng_today_speaking?owner_id=eq.$OWNER_ID&order=started_at.desc'
+scripts/eng.sh GET 'eng_recent_speaking?owner_id=eq.$OWNER_ID&order=started_at.desc&limit=20'
+scripts/eng.sh GET 'eng_today_pronunciation?owner_id=eq.$OWNER_ID&order=created_at.desc'
+scripts/eng.sh GET 'eng_recent_pronunciation?owner_id=eq.$OWNER_ID&order=recorded_on.desc&limit=50'
+```
+
+会話の本文とフィードバックは `eng_speaking_sessions` の `transcript` と `feedback` です。発音の単語と音素は `eng_pronunciation_attempts` の `words` です。どちらもアプリが `created_by=app` で書きます。チューターは読んで、質問・課題・表現に反映します。この2つの表へボットが直接書く必要はありません。
+
+```bash
+scripts/eng.sh GET 'eng_speaking_sessions?owner_id=eq.$OWNER_ID&order=started_at.desc&limit=10'
+scripts/eng.sh GET 'eng_pronunciation_attempts?owner_id=eq.$OWNER_ID&order=created_at.desc&limit=30'
 ```
 
 今日の質問と作文は、東京の日付で区切ります。URL では `+` を `%2B` にします。
@@ -326,6 +467,10 @@ curl -s "$SUPABASE_URL/rest/v1/eng_resources" \
 | `eng_submitted_assignments` | `status=submitted`（フィードバック待ち） |
 | `eng_today_expressions` | 東京の今日の表現 |
 | `eng_today_resources` | 東京の今日の教材 |
+| `eng_today_speaking` | 東京の今日の会話 |
+| `eng_recent_speaking` | 過去14日の会話 |
+| `eng_today_pronunciation` | 東京の今日の発音 |
+| `eng_recent_pronunciation` | 過去30日の発音 |
 
 ### 削除
 
@@ -343,3 +488,4 @@ scripts/eng.sh DELETE 'eng_resources?id=eq.RESOURCE_ID&owner_id=eq.$OWNER_ID'
 - URL が保存できない: `https://` か `http://` で始める。
 - ログインできない: 予定アプリと同じユーザーです。Auto Confirm がオフだと失敗します。
 - ページが古い: 一度閉じて開き直す。`config.js` は予定アプリと共通で、ネットワーク優先です。
+- 会話や発音が見本のまま: 「スピーキングを有効にする」の SQL と、GitHub Actions の **Deploy speaking functions** がまだです。API キーは GitHub の Actions 秘密にだけ入れ、`config.js` には書きません。
