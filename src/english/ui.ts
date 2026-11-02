@@ -20,6 +20,10 @@ import {
   questionStatusLabel,
 } from "./labels";
 import { emit, state } from "./state";
+import { scenarioLabel } from "./catalog";
+import { bindSpeaking, handleSpeakingAction, pronunciationPage, speakingPage } from "./speaking-ui";
+import { stopSpeaking } from "./realtime";
+import { paintToast, showToast } from "./toast";
 import { addDays, formatStamp, shortMonthDay, tokyoDate, weekdayOf } from "../time";
 import type {
   Actor,
@@ -43,6 +47,8 @@ const ICONS: Record<string, string> = {
   edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
   assignment:
     "M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z",
+  mic: "M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.31 6-6.72h-1.7z",
+  wave: "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z",
   add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
   more: "M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z",
   calendar:
@@ -51,6 +57,8 @@ const ICONS: Record<string, string> = {
 
 const NAV: { id: EngScreen; label: string; icon: string }[] = [
   { id: "home", label: "ホーム", icon: "home" },
+  { id: "speaking", label: "会話", icon: "mic" },
+  { id: "pronunciation", label: "発音", icon: "wave" },
   { id: "expressions", label: "表現", icon: "book" },
   { id: "resources", label: "教材", icon: "link" },
   { id: "questions", label: "質問", icon: "chat" },
@@ -59,7 +67,6 @@ const NAV: { id: EngScreen; label: string; icon: string }[] = [
 ];
 
 const scrollTops = new Map<string, number>();
-let toastTimer = 0;
 let lastDialogKey = "";
 
 function icon(name: string): string {
@@ -130,25 +137,6 @@ function dialogKey(dialog: Dialog): string {
   return `${dialog.kind}:${dialog.id ?? "new"}`;
 }
 
-export function showToast(message: string): void {
-  state.toast = message;
-  paintToast();
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
-    state.toast = null;
-    paintToast();
-  }, 2600);
-}
-
-function paintToast(): void {
-  document.querySelector(".snackbar")?.remove();
-  if (!state.toast) return;
-  const el = document.createElement("div");
-  el.className = "snackbar";
-  el.setAttribute("role", "status");
-  el.textContent = state.toast;
-  document.getElementById("app")?.appendChild(el);
-}
 
 function setBusy(busy: boolean): void {
   document.querySelectorAll<HTMLButtonElement>("#app button").forEach((btn) => {
@@ -179,7 +167,8 @@ export function render(): void {
   if (old?.dataset.keepScroll) scrollTops.set(old.dataset.keepScroll, old.scrollTop);
   root.innerHTML = state.booting ? splash() : page();
   const next = root.querySelector<HTMLElement>("[data-keep-scroll]");
-  if (next) next.scrollTop = scrollTops.get(next.dataset.keepScroll ?? "") ?? 0;
+  const followLive = state.screen === "speaking" && (state.speakPhase === "live" || state.speakPhase === "wrapping" || state.speakPhase === "connecting");
+  if (next) next.scrollTop = followLive ? next.scrollHeight : (scrollTops.get(next.dataset.keepScroll ?? "") ?? 0);
   if (state.highlightId) {
     document.getElementById(`item-${state.highlightId}`)?.scrollIntoView({ block: "center" });
     state.highlightId = null;
@@ -267,7 +256,7 @@ function bar(): string {
 }
 
 function fab(): string {
-  if (state.screen === "assignments") return "";
+  if (state.screen === "assignments" || state.screen === "speaking" || state.screen === "pronunciation") return "";
   const label =
     state.screen === "home"
       ? "追加"
@@ -283,6 +272,8 @@ function fab(): string {
 
 function body(): string {
   if (state.screen === "home") return home();
+  if (state.screen === "speaking") return speakingPage();
+  if (state.screen === "pronunciation") return pronunciationPage();
   if (state.screen === "expressions") return expressionsPage();
   if (state.screen === "resources") return resourcesPage();
   if (state.screen === "questions") return questionsPage();
@@ -291,6 +282,8 @@ function body(): string {
 }
 
 function home(): string {
+  const todaySpeak = state.speakingSessions.filter((row) => tokyoDate(row.started_at) === state.today).length;
+  const todayPron = state.pronunciationAttempts.filter((row) => row.recorded_on === state.today).length;
   const todayExpr = state.expressions.filter((row) => row.learned_on === state.today).length;
   const todayRes = state.resources.filter((row) => row.recorded_on === state.today).length;
   const todayQ = state.questions.filter((row) => tokyoDate(row.created_at) === state.today).length;
@@ -306,7 +299,13 @@ function home(): string {
   return `<section class="section">
       <h2>今日の学習</h2>
       <p class="supporting">${esc(shortMonthDay(state.today))}（${esc(weekdayOf(state.today))}） · 目標は毎日1時間以上。単語、英作文、リスニング、スピーキング。</p>
+      <div class="launch">
+        <button type="button" class="btn filled" data-action="go" data-screen="speaking">会話する</button>
+        <button type="button" class="btn tonal" data-action="go" data-screen="pronunciation">発音をチェック</button>
+      </div>
       <div class="stat-grid">
+        ${stat("speaking", String(todaySpeak), "今日の会話")}
+        ${stat("pronunciation", String(todayPron), "今日の発音")}
         ${stat("expressions", String(todayExpr), "今日の表現")}
         ${stat("resources", String(todayRes), "今日の教材")}
         ${stat("questions", String(todayQ), "今日の質問")}
@@ -353,6 +352,28 @@ function stat(screen: EngScreen, num: string, label: string): string {
 
 function todayActivity(): { id: string; screen: EngScreen; kicker: string; title: string; at: string }[] {
   const items: { id: string; screen: EngScreen; kicker: string; title: string; at: string }[] = [];
+  for (const row of state.speakingSessions) {
+    if (tokyoDate(row.started_at) === state.today) {
+      items.push({
+        id: row.id,
+        screen: "speaking",
+        kicker: "会話",
+        title: row.topic || scenarioLabel(row.scenario),
+        at: row.started_at,
+      });
+    }
+  }
+  for (const row of state.pronunciationAttempts) {
+    if (row.recorded_on === state.today) {
+      items.push({
+        id: row.id,
+        screen: "pronunciation",
+        kicker: "発音",
+        title: row.reference_text || row.recognized_text || "発音",
+        at: row.created_at,
+      });
+    }
+  }
   for (const row of state.expressions) {
     if (row.learned_on === state.today) {
       items.push({ id: row.id, screen: "expressions", kicker: "表現", title: row.term, at: row.created_at });
@@ -821,6 +842,7 @@ export function bindEnglish(): void {
       emit();
     }
   });
+  bindSpeaking();
   window.addEventListener("hashchange", () => {
     const name = location.hash.replace(/^#\/?/, "") || "home";
     if (!isEngScreen(name) || name === state.screen) return;
@@ -832,6 +854,7 @@ export function bindEnglish(): void {
 }
 
 async function onAction(action: string, el: HTMLElement): Promise<void> {
+  if (await handleSpeakingAction(action, el)) return;
   if (action === "menu") {
     state.menuOpen = !state.menuOpen;
     emit();
@@ -932,6 +955,7 @@ async function onAction(action: string, el: HTMLElement): Promise<void> {
     return;
   }
   if (action === "sign-out") {
+    await stopSpeaking("leave");
     await signOut();
     state.menuOpen = false;
     emit();
@@ -966,7 +990,15 @@ function setFilter(group: string, valueText: string): void {
 }
 
 function isDeleteTarget(value: string | undefined): value is DeleteTarget {
-  return value === "expression" || value === "resource" || value === "question" || value === "essay" || value === "assignment";
+  return (
+    value === "expression" ||
+    value === "resource" ||
+    value === "question" ||
+    value === "essay" ||
+    value === "assignment" ||
+    value === "speaking" ||
+    value === "pronunciation"
+  );
 }
 
 async function onSubmit(form: string): Promise<void> {

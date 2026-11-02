@@ -1,7 +1,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { readConfig } from "../config";
 import { clearEnglishDemo, loadEnglishDemo, saveEnglishDemo, seedEnglish } from "./demo";
 import { emit, state } from "./state";
+import { readConfig } from "../config";
+import { normalizeFeedback } from "./feedback";
 import type {
   Actor,
   Assignment,
@@ -10,13 +11,22 @@ import type {
   Essay,
   EssayStatus,
   Expression,
+  PronunciationAttempt,
+  PronunciationMode,
+  PronunciationSource,
   Question,
   QuestionStatus,
   Resource,
   ResourceKind,
   Result,
+  SpeakingFeedback,
+  SpeakingLevel,
+  SpeakingScenario,
+  SpeakingSession,
+  TranscriptLine,
+  WordScore,
 } from "./types";
-import { isActor } from "./types";
+import { isActor, isPronunciationMode, isSpeakingLevel, isSpeakingScenario } from "./types";
 
 const TABLES = [
   "eng_expressions",
@@ -38,6 +48,8 @@ function bundleFromState(): EnglishBundle {
     questions: state.questions,
     essays: state.essays,
     assignments: state.assignments,
+    speaking: state.speakingSessions,
+    pronunciation: state.pronunciationAttempts,
   };
 }
 
@@ -47,6 +59,9 @@ function applyBundle(bundle: EnglishBundle): void {
   state.questions = bundle.questions;
   state.essays = bundle.essays;
   state.assignments = bundle.assignments;
+  state.speakingSessions = bundle.speaking;
+  state.pronunciationAttempts = bundle.pronunciation;
+  state.speakingSchema = true;
 }
 
 function persist(): void {
@@ -74,7 +89,13 @@ function humanError(err: unknown): string {
     return "保存する権限がありません。ログインしているか確認してください";
   }
   if (/Failed to fetch|NetworkError|network/i.test(raw)) return "ネットワークに接続できません";
+  if (/eng_speaking_topic/i.test(raw)) return "自分で決めるときは、話題を入力してください";
+  if (/eng_speaking_max_minutes|eng_speaking_duration/i.test(raw)) return "会話の時間は20分までです";
+  if (/eng_pronunciation_reference/i.test(raw)) return "読み上げる文を1〜500文字で入力してください";
   if (/schema cache|does not exist|PGRST205|Could not find the table/i.test(raw)) {
+    if (/eng_speaking_sessions|eng_pronunciation_attempts/i.test(raw)) {
+      return "会話と発音の表がまだありません。SupabaseのSQL Editorで english_speaking_schema.sql を一度実行してください";
+    }
     return "英語学習の表がまだありません。SupabaseのSQL Editorで english_schema.sql を一度実行してください";
   }
   return "保存できませんでした。少し待ってからもう一度試してください";
@@ -213,6 +234,24 @@ async function loadLive(): Promise<Result> {
   state.questions = ((questions.data ?? []) as Record<string, unknown>[]).map(asQuestion);
   state.essays = ((essays.data ?? []) as Record<string, unknown>[]).map(asEssay);
   state.assignments = ((assignments.data ?? []) as Record<string, unknown>[]).map(asAssignment);
+
+  const [speaking, pronunciation] = await Promise.all([
+    sb.from("eng_speaking_sessions").select("*").order("started_at", { ascending: false }).limit(200),
+    sb.from("eng_pronunciation_attempts").select("*").order("created_at", { ascending: false }).limit(500),
+  ]);
+  const extraError = speaking.error || pronunciation.error;
+  if (extraError && missingTable(extraError)) {
+    state.speakingSchema = false;
+    state.speakingSessions = [];
+    state.pronunciationAttempts = [];
+  } else if (extraError) {
+    return { ok: false, error: humanError(extraError) };
+  } else {
+    state.speakingSchema = true;
+    state.speakingSessions = ((speaking.data ?? []) as Record<string, unknown>[]).map(asSpeaking);
+    state.pronunciationAttempts = ((pronunciation.data ?? []) as Record<string, unknown>[]).map(asPronunciation);
+  }
+
   state.connected = true;
   state.loadError = null;
   return { ok: true };
@@ -222,7 +261,9 @@ function subscribeRealtime(): void {
   if (realtimeChannel) return;
   const sb = client();
   const channel = sb.channel("english-study");
-  for (const table of TABLES) {
+  const tables: string[] = [...TABLES];
+  if (state.speakingSchema) tables.push("eng_speaking_sessions", "eng_pronunciation_attempts");
+  for (const table of tables) {
     channel.on("postgres_changes", { event: "*", schema: "public", table }, () => queueReload());
   }
   realtimeChannel = channel;
@@ -239,7 +280,9 @@ function queueReload(): void {
   reloadTimer = window.setTimeout(() => {
     const el = document.activeElement;
     const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
-    if (typing || state.dialog) {
+    const speakingLive =
+      state.speakPhase === "connecting" || state.speakPhase === "live" || state.speakPhase === "wrapping";
+    if (typing || state.dialog || speakingLive || state.pronPhase === "recording") {
       queueReload();
       return;
     }
@@ -267,6 +310,115 @@ function clearLiveData(): void {
   state.questions = [];
   state.essays = [];
   state.assignments = [];
+  state.speakingSessions = [];
+  state.pronunciationAttempts = [];
+}
+
+function missingTable(error: { message?: string; code?: string } | null): boolean {
+  const raw = `${error?.message ?? ""} ${error?.code ?? ""}`;
+  return /schema cache|does not exist|PGRST205|Could not find the table/i.test(raw);
+}
+
+function asScore(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(100, num));
+}
+
+function asTranscript(value: unknown): TranscriptLine[] {
+  if (!Array.isArray(value)) return [];
+  const out: TranscriptLine[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const role = row.role === "assistant" ? "assistant" : row.role === "user" ? "user" : null;
+    const text = String(row.text ?? "").trim().slice(0, 2000);
+    if (!role || !text) continue;
+    out.push({ role, text, at: String(row.at ?? "") });
+    if (out.length >= 200) break;
+  }
+  return out;
+}
+
+function asWords(value: unknown): WordScore[] {
+  if (!Array.isArray(value)) return [];
+  const out: WordScore[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const word = String(row.word ?? "").trim().slice(0, 80);
+    if (!word) continue;
+    const phonemes = Array.isArray(row.phonemes)
+      ? row.phonemes
+          .map((phoneme) => {
+            if (!phoneme || typeof phoneme !== "object") return null;
+            const cell = phoneme as Record<string, unknown>;
+            const symbol = String(cell.phoneme ?? "").trim().slice(0, 16);
+            if (!symbol) return null;
+            return { phoneme: symbol, accuracy: asScore(cell.accuracy) };
+          })
+          .filter((phoneme): phoneme is WordScore["phonemes"][number] => phoneme != null)
+          .slice(0, 24)
+      : [];
+    out.push({
+      word,
+      accuracy: asScore(row.accuracy),
+      error_type: String(row.error_type ?? "None").slice(0, 40),
+      phonemes,
+    });
+    if (out.length >= 80) break;
+  }
+  return out;
+}
+
+function asSpeaking(row: Record<string, unknown>): SpeakingSession {
+  const scenarioText = String(row.scenario ?? "");
+  const levelText = String(row.level ?? "");
+  const scenario: SpeakingScenario = isSpeakingScenario(scenarioText) ? scenarioText : "free_talk";
+  const level: SpeakingLevel = isSpeakingLevel(levelText) ? levelText : "b1";
+  const minutes = Number(row.max_minutes);
+  return {
+    id: String(row.id),
+    scenario,
+    topic: String(row.topic ?? "").slice(0, 200),
+    level,
+    max_minutes: minutes === 5 || minutes === 10 || minutes === 15 || minutes === 20 ? minutes : 10,
+    started_at: String(row.started_at ?? ""),
+    ended_at: row.ended_at == null ? null : String(row.ended_at),
+    duration_seconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
+    transcript: asTranscript(row.transcript),
+    feedback: normalizeFeedback(row.feedback),
+    model: row.model == null ? null : String(row.model),
+    created_by: actorOf(row.created_by),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+  };
+}
+
+function asPronunciation(row: Record<string, unknown>): PronunciationAttempt {
+  const modeText = String(row.mode ?? "");
+  const mode: PronunciationMode = isPronunciationMode(modeText) ? modeText : "read_aloud";
+  const source: PronunciationSource = row.source === "conversation" ? "conversation" : "manual";
+  return {
+    id: String(row.id),
+    mode,
+    reference_text: row.reference_text == null ? null : String(row.reference_text),
+    recognized_text: String(row.recognized_text ?? ""),
+    accuracy: asScore(row.accuracy),
+    fluency: asScore(row.fluency),
+    completeness: asScore(row.completeness),
+    prosody: asScore(row.prosody),
+    pronunciation: asScore(row.pronunciation),
+    words: asWords(row.words),
+    focus: row.focus == null ? null : String(row.focus),
+    source,
+    session_id: row.session_id == null ? null : String(row.session_id),
+    recorded_on: String(row.recorded_on ?? ""),
+    created_by: actorOf(row.created_by),
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+  };
 }
 
 export async function boot(): Promise<void> {
@@ -585,7 +737,10 @@ export async function submitAssignment(id: string, answer: string): Promise<Resu
   return { ok: true };
 }
 
-export async function deleteEnglish(target: "expression" | "resource" | "question" | "essay" | "assignment", id: string): Promise<Result> {
+export async function deleteEnglish(
+  target: "expression" | "resource" | "question" | "essay" | "assignment" | "speaking" | "pronunciation",
+  id: string,
+): Promise<Result> {
   const gated = guard();
   if (!gated.ok) return gated;
   const table =
@@ -597,13 +752,19 @@ export async function deleteEnglish(target: "expression" | "resource" | "questio
           ? "eng_questions"
           : target === "essay"
             ? "eng_essays"
-            : "eng_assignments";
+            : target === "speaking"
+              ? "eng_speaking_sessions"
+              : target === "pronunciation"
+                ? "eng_pronunciation_attempts"
+                : "eng_assignments";
   if (state.mode === "demo") {
     if (target === "expression") state.expressions = state.expressions.filter((row) => row.id !== id);
     if (target === "resource") state.resources = state.resources.filter((row) => row.id !== id);
     if (target === "question") state.questions = state.questions.filter((row) => row.id !== id);
     if (target === "essay") state.essays = state.essays.filter((row) => row.id !== id);
     if (target === "assignment") state.assignments = state.assignments.filter((row) => row.id !== id);
+    if (target === "speaking") state.speakingSessions = state.speakingSessions.filter((row) => row.id !== id);
+    if (target === "pronunciation") state.pronunciationAttempts = state.pronunciationAttempts.filter((row) => row.id !== id);
     persist();
     return { ok: true };
   }
@@ -614,5 +775,140 @@ export async function deleteEnglish(target: "expression" | "resource" | "questio
   if (target === "question") state.questions = state.questions.filter((row) => row.id !== id);
   if (target === "essay") state.essays = state.essays.filter((row) => row.id !== id);
   if (target === "assignment") state.assignments = state.assignments.filter((row) => row.id !== id);
+  if (target === "speaking") state.speakingSessions = state.speakingSessions.filter((row) => row.id !== id);
+  if (target === "pronunciation") state.pronunciationAttempts = state.pronunciationAttempts.filter((row) => row.id !== id);
   return { ok: true };
+}
+
+function isUuid(value: string | null): value is string {
+  return !!value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+export type SpeakingInput = {
+  scenario: SpeakingScenario;
+  topic: string;
+  level: SpeakingLevel;
+  max_minutes: number;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  transcript: TranscriptLine[];
+  feedback: SpeakingFeedback | null;
+  model: string | null;
+};
+
+export async function saveSpeakingSession(input: SpeakingInput): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const gated = guard();
+  if (!gated.ok) return gated;
+  const row = {
+    ...input,
+    topic: input.topic.slice(0, 200),
+    duration_seconds: input.duration_seconds == null ? null : Math.max(0, Math.min(2400, Math.round(input.duration_seconds))),
+    transcript: input.transcript.slice(0, 200),
+    created_by: "app" as const,
+  };
+  if (state.mode === "demo") {
+    const stamp = nowIso();
+    const saved: SpeakingSession = { id: crypto.randomUUID(), ...row, created_at: stamp, updated_at: stamp };
+    state.speakingSessions.unshift(saved);
+    persist();
+    return { ok: true, id: saved.id };
+  }
+  if (!state.speakingSchema) {
+    return { ok: false, error: "会話の表がまだありません。english_speaking_schema.sql を一度実行してください" };
+  }
+  const { data, error } = await client().from("eng_speaking_sessions").insert(row).select("*").single();
+  if (error) return { ok: false, error: humanError(error) };
+  const saved = asSpeaking(data as Record<string, unknown>);
+  state.speakingSessions.unshift(saved);
+  return { ok: true, id: saved.id };
+}
+
+export type PronunciationInput = {
+  mode: PronunciationMode;
+  reference_text: string | null;
+  recognized_text: string;
+  accuracy: number | null;
+  fluency: number | null;
+  completeness: number | null;
+  prosody: number | null;
+  pronunciation: number | null;
+  words: WordScore[];
+  focus: string | null;
+  source: PronunciationSource;
+  session_id: string | null;
+  recorded_on: string;
+};
+
+export async function savePronunciation(input: PronunciationInput): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const gated = guard();
+  if (!gated.ok) return gated;
+  const row = {
+    ...input,
+    session_id: isUuid(input.session_id) ? input.session_id : null,
+    recognized_text: input.recognized_text.slice(0, 2000),
+    reference_text: input.reference_text ? input.reference_text.slice(0, 500) : null,
+    words: input.words.slice(0, 80),
+    created_by: "app" as const,
+  };
+  if (state.mode === "demo") {
+    const stamp = nowIso();
+    const saved: PronunciationAttempt = { id: crypto.randomUUID(), ...row, created_at: stamp, updated_at: stamp };
+    state.pronunciationAttempts.unshift(saved);
+    persist();
+    return { ok: true, id: saved.id };
+  }
+  if (!state.speakingSchema) {
+    return { ok: false, error: "発音の表がまだありません。english_speaking_schema.sql を一度実行してください" };
+  }
+  const { data, error } = await client().from("eng_pronunciation_attempts").insert(row).select("*").single();
+  if (error) return { ok: false, error: humanError(error) };
+  const saved = asPronunciation(data as Record<string, unknown>);
+  state.pronunciationAttempts.unshift(saved);
+  return { ok: true, id: saved.id };
+}
+
+export async function invokeFunction(
+  name: "realtime-session" | "speech-token",
+  body: unknown,
+): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string; status: number }> {
+  if (!supabase || state.mode !== "live") return { ok: false, error: "デモモードです", status: 0 };
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return { ok: false, error: "先にログインしてください", status: 401 };
+  const cfg = readConfig();
+  let response: Response;
+  try {
+    response = await fetch(`${cfg.url.replace(/\/$/, "")}/functions/v1/${name}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: cfg.anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+  } catch {
+    return { ok: false, error: "ネットワークに接続できません", status: 0 };
+  }
+  let payload: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = await response.json();
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    const message = typeof payload.error === "string" ? payload.error : "";
+    if (response.status === 401) return { ok: false, error: "ログインの期限が切れました。もう一度ログインしてください", status: 401 };
+    if (response.status === 404) {
+      return {
+        ok: false,
+        error: "スピーキング用の関数がまだデプロイされていません。docs/english.md の手順で GitHub Actions を実行してください。",
+        status: 404,
+      };
+    }
+    return { ok: false, error: message || "サーバーに接続できませんでした", status: response.status };
+  }
+  return { ok: true, data: payload };
 }

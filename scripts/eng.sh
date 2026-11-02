@@ -7,6 +7,12 @@
 #   eng.sh POST eng_resources '{"owner_id":"$OWNER_ID","url":"https://example.com","title":"例","kind":"article","added_by":"researcher","created_by":"researcher"}'
 #   eng.sh PATCH 'eng_essays?id=eq.ESSAY_ID&owner_id=eq.$OWNER_ID' '{"status":"corrected","corrected_text":"...","explanation":"...","corrected_by":"writer"}'
 #   eng.sh DELETE 'eng_resources?id=eq.ID&owner_id=eq.$OWNER_ID'
+#   eng.sh GET 'eng_speaking_sessions?owner_id=eq.$OWNER_ID&order=started_at.desc&limit=20'
+#   eng.sh GET 'eng_today_speaking?owner_id=eq.$OWNER_ID&order=started_at.desc'
+#   eng.sh GET 'eng_recent_speaking?owner_id=eq.$OWNER_ID&order=started_at.desc'
+#   eng.sh GET 'eng_pronunciation_attempts?owner_id=eq.$OWNER_ID&order=created_at.desc&limit=50'
+#   eng.sh GET 'eng_today_pronunciation?owner_id=eq.$OWNER_ID&order=created_at.desc'
+#   eng.sh GET 'eng_recent_pronunciation?owner_id=eq.$OWNER_ID&order=recorded_on.desc'
 #
 # 環境変数 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OWNER_ID が揃っていればそれを使う。
 # 足りなければ ENG_CREDENTIALS（既定: /home/box/agent-data/lifemanager/credentials.env）を読む。
@@ -38,6 +44,8 @@ BODY="${3:-}"
 
 if [[ -z "$METHOD" || -z "$PATH_ARG" ]]; then
   echo "使い方: eng.sh GET|POST|PATCH|DELETE <rest/v1 のパス> [JSON]" >&2
+  echo "会話: eng.sh GET 'eng_speaking_sessions?owner_id=eq.\$OWNER_ID&order=started_at.desc&limit=20'" >&2
+  echo "発音: eng.sh GET 'eng_pronunciation_attempts?owner_id=eq.\$OWNER_ID&order=created_at.desc&limit=50'" >&2
   exit 1
 fi
 
