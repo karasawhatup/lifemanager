@@ -52,11 +52,13 @@
 
 `public/config.js` の URL と鍵が空なら、デモモードです。サンプルの表現、教材、質問、作文、課題、会話、発音が、そのブラウザの中だけに保存されます。サーバーには送られません。右上のメニューの **サンプルに戻す** で最初の状態に戻せます。予定アプリの「サンプルに戻す」とは別です。
 
-デモモードの会話と発音は見本です。マイクも、OpenAI も、Azure も使いません。画面にはその旨が出ます。鍵を入れたあとの結果の見た目を確認するためのものです。
+デモモードの会話と発音は見本です。マイクも、Gemini も、Azure も使いません。画面にはその旨が出ます。鍵を入れたあとの結果の見た目を確認するためのものです。
 
 ## スピーキングを有効にする
 
-会話は [OpenAI Realtime API](https://developers.openai.com/api/docs/guides/realtime) の音声、発音は [Azure AI Speech の発音評価](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-pronunciation-assessment) です。どちらも使った分だけ課金されます。無料の枠は小さく、放置すると料金がかかります。会話は画面の上限（初期値 10 分。5 / 10 / 15 / 20 分から選べます）で自動的に切れ、経過時間を表示します。タブを閉じるとマイクも止まります。
+会話の返事は [Gemini API](https://ai.google.dev/gemini-api/docs/pricing) の無料枠です。声の認識と読み上げは、ブラウザの Web Speech API で、追加料金はありません。発音の採点だけ [Azure AI Speech](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-pronunciation-assessment) を使います。Azure の無料枠（F0）には月の上限があり、超えると有料になります。会話は画面の上限（初期値 10 分。5 / 10 / 15 / 20 分から選べます）で自動的に切れ、経過時間を表示します。
+
+API キーはブラウザにも `config.js` にもリポジトリにも置きません。Supabase の Edge Function だけが鍵を持ち、ログイン済みのユーザーに返事だけを返します。
 
 API キーはブラウザにも `config.js` にもリポジトリにも置きません。Supabase の Edge Function だけが鍵を持ち、ログイン済みのユーザーに、短いトークンだけを返します。
 
@@ -74,14 +76,15 @@ API キーはブラウザにも `config.js` にもリポジトリにも置きま
 
 この SQL は、予定の表も、すでにある `eng_expressions` などの表も、中のデータも変更しません。もう一度 Run しても、入っている記録は消えません。
 
-### 2. OpenAI の API キー
+### 2. Gemini の API キー（無料）
 
-1. [OpenAI の API keys](https://platform.openai.com/api-keys) を開く。
-2. **Create new secret key**。名前は `lifemanager-speaking` などでよい。
-3. 表示された `sk-` で始まる鍵を、パスワード管理の場所に控える。この画面を閉じると、もう一度は表示されません。
-4. 課金の支払い方法が OpenAI に無いと、Realtime API は動きません。組織の **Billing** で確認します。
+1. [Google AI Studio の API キー](https://aistudio.google.com/apikey) を開く。Google アカウントで入る。
+2. **Create API key**。支払い方法は要りません。無料枠のまま使います。
+3. 表示された鍵を控える。これが `GEMINI_API_KEY`。リポジトリには貼らない。
+4. 無料枠には、1分あたりと1日あたりの回数の上限があります。超えると画面に「無料枠の回数に達しました。1分ほど待ってからもう一度話してください」と出ます。待ってからもう一度押します。
+5. 無料枠で送った文章は、Google が製品の改善に使うことがあります。話した英文と、画面が送る会話の履歴がこれに含まれます。有料プランにすると、改善への利用は止まりますが、このアプリは無料枠のままです。
 
-アプリが使うモデルは `gpt-realtime-2.1`、声は `marin` です。ブラウザは鍵そのものではなく、約2分で失効する `ek_` トークンだけを受け取り、`POST https://api.openai.com/v1/realtime/calls` で WebRTC 接続します。トークンの発行は Edge Function が `POST https://api.openai.com/v1/realtime/client_secrets` で行います。
+アプリが使うモデルは `gemini-3.8-flash` です。Edge Function が `POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent` を呼びます。ブラウザは鍵を持たず、返事の英文だけを受け取ります。声はブラウザの音声認識（`en-US`）と読み上げです。Firefox のように音声認識が無いブラウザでは、英語を打って送れます。
 
 ### 3. Azure Speech のキー（無料の F0）
 
@@ -116,7 +119,7 @@ API キーはブラウザにも `config.js` にもリポジトリにも置きま
 | --- | --- |
 | `SUPABASE_ACCESS_TOKEN` | 手順4のアクセストークン |
 | `SUPABASE_PROJECT_REF` | 手順4の Reference ID |
-| `OPENAI_API_KEY` | 手順2の `sk-` の鍵 |
+| `GEMINI_API_KEY` | 手順2の Gemini の鍵 |
 | `AZURE_SPEECH_KEY` | 手順3のキー 1 |
 | `AZURE_SPEECH_REGION` | `japaneast` や `eastus` |
 
@@ -126,7 +129,7 @@ API キーはブラウザにも `config.js` にもリポジトリにも置きま
 
 1. この変更が `main` に入っていること。入っていないと、ワークフローのファイルがまだありません。
 2. GitHub の **Actions** → **Deploy speaking functions** → **Run workflow** → `main` を選んで実行。
-3. 緑になれば、`realtime-session` と `speech-token` がデプロイされ、上の3つの API 秘密が Supabase の関数秘密に入っています。ログに鍵の値は出しません。
+3. 緑になれば、`conversation-reply` と `speech-token` がデプロイされ、Gemini と Azure の秘密が Supabase の関数秘密に入っています。以前の `OPENAI_API_KEY` はもう使いません。GitHub の Actions 秘密にあれば消してかまいません。ログに鍵の値は出しません。
 4. 秘密が空のまま実行すると、デプロイはせずに終わります。秘密を入れてから、もう一度 **Run workflow** します。
 5. 関数のファイルを `main` に push したときも、秘密が揃っていれば同じワークフローが動きます。
 
@@ -136,7 +139,7 @@ API キーはブラウザにも `config.js` にもリポジトリにも置きま
 
 1. GitHub Pages の Deploy が終わった `https://karasawhatup.github.io/lifemanager/english/` を開く。
 2. 予定アプリと同じメールアドレスとパスワードでログインする。
-3. **会話** で場面とレベルを選び、**会話を始める**。ブラウザがマイクを聞いてきたら許可する。上限の時間と、経過時間が出ます。終了すると、文字起こしとフィードバックが残り、表現は **表現メモに追加** で今の表現リストに入ります。
+3. **会話** で場面とレベル、声と速さを選び、**会話を始める**。**話す** を押して英語を話すと、少し黙ったところで止まり、Gemini が返事をします。音声認識が無いブラウザでは、下の欄に英語を打って **送る**。iPhone は Safari で開き、AI の声が鳴らないときは **聞く** を押します。終了すると、文字起こしとフィードバックが残り、表現は **表現メモに追加** で今の表現リストに入ります。話した直後の **この発話を採点** は、その録音を Azure に渡します。録音が残っていない文は、発音の画面でもう一度読みます。
 4. **発音** で文を選び、**録音して採点**。点数、色のついた単語と音素、日本語のヒント、折れ線、よくずれる音が出ます。
 
 iPhone は Safari で開きます。ホーム画面に追加したあとも、最初にマイクを許可します。LINE などのアプリ内ブラウザでは、マイクが使えないことが多いです。サイレントスイッチがオンだと、AI の声が聞こえないことがあります。
@@ -166,7 +169,7 @@ iPhone は Safari で開きます。ホーム画面に追加したあとも、�
 }
 ```
 
-発音の `mode` は `read_aloud`（台本あり）か `unscripted`（台本なし）です。`words` は `{word, accuracy, error_type, phonemes:[{phoneme, accuracy}]}` です。`error_type` には `None`、`Mispronunciation`、`Omission`、`Insertion` などが出ます。点数は 0 から 100 です。`source` が `conversation` の行は、会話の文を発音画面でもう一度読んだ記録です。会話中の音声そのものは Azure に送りません。マイクを会話が使っているためです。
+発音の `mode` は `read_aloud`（台本あり）か `unscripted`（台本なし）です。`words` は `{word, accuracy, error_type, phonemes:[{phoneme, accuracy}]}` です。`error_type` には `None`、`Mispronunciation`、`Omission`、`Insertion` などが出ます。点数は 0 から 100 です。`source` が `conversation` の行は、会話で話した録音を採点したか、その文をもう一度読んだ記録です。ブラウザが録音を残せなかったときは、もう一度読む方式です。
 
 読み上げ用の文は、L/R、TH、V/B、F/H、母音、強勢、リンキングを含みます。自由発話は参照文なしで、Azure が聞き取った内容を採点します。完全さは出ないことがあります。音素の詳細は `en-US` です。
 
@@ -175,7 +178,9 @@ iPhone は Safari で開きます。ホーム画面に追加したあとも、�
 - 会話も発音も見本しか出ない: デモモードか、関数がまだ無いか、鍵が違う。上の手順 5 と 6 を確認する。`config.js` は空に戻さない。anon key 以外は書かない。
 - 「表がまだありません」: 手順 1 の SQL がまだ。既存の英語の画面は、この SQL の前でも使える。
 - マイクが使えない: サイトの許可、Safari、サイレントスイッチ。`http://` の素の IP ではマイクは使えません。GitHub Pages は https です。
-- トークンのエラー: OpenAI の支払い方法、Azure のキーとリージョン名（`japaneast` のように英字だけ）。関数のログは Supabase の **Edge Functions → Logs**。
+- 「無料枠の回数に達しました」: Gemini の無料枠です。1分ほど待ってからもう一度話します。支払い方法は要りません。
+- 発音のトークンのエラー: Azure のキーとリージョン名（`japaneast` のように英字だけ）。関数のログは Supabase の **Edge Functions → Logs**。
+- 声で話せない: Firefox など、音声認識が無いブラウザです。英語を打って送ります。iPhone は Safari で開きます。
 - 10分で切れる: 画面の上限です。20分より長くは選べません。
 
 会話の記録が画面に出ないときは、他の表と同じで `owner_id` がログイン中のユーザーと違います。

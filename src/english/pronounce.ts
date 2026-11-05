@@ -119,6 +119,82 @@ export function cancelPronunciation(): void {
   }
 }
 
+async function assessOnce(
+  sdk: SpeechModule,
+  token: string,
+  region: string,
+  audio: ReturnType<SpeechModule["AudioConfig"]["fromDefaultMicrophoneInput"]>,
+  reference: string,
+  scripted: boolean,
+): Promise<ScoredSpeech> {
+  const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(token, region);
+  speechConfig.speechRecognitionLanguage = "en-US";
+  speechConfig.outputFormat = sdk.OutputFormat.Detailed;
+  const assessment = new sdk.PronunciationAssessmentConfig(
+    scripted ? reference : "",
+    sdk.PronunciationAssessmentGradingSystem.HundredMark,
+    sdk.PronunciationAssessmentGranularity.Phoneme,
+    scripted,
+  );
+  assessment.phonemeAlphabet = "IPA";
+  assessment.enableProsodyAssessment = true;
+  const rec = new sdk.SpeechRecognizer(speechConfig, audio);
+  assessment.applyTo(rec);
+  recognizer = rec;
+  try {
+    return await recognizeOnce(sdk, rec);
+  } finally {
+    try {
+      rec.close();
+    } catch {
+      /* すでに閉じている */
+    }
+    if (recognizer === rec) recognizer = null;
+  }
+}
+
+export async function scoreWavFile(
+  file: File,
+  reference: string,
+  sessionId: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const mine = ++run;
+  try {
+    const auth = await invokeFunction("speech-token", {});
+    if (mine !== run) return { ok: false, error: "採点を中断しました" };
+    if (!auth.ok) return { ok: false, error: auth.error };
+    const speechToken = typeof auth.data.token === "string" ? auth.data.token : "";
+    const region = typeof auth.data.region === "string" ? auth.data.region : "";
+    if (!speechToken || !region) return { ok: false, error: "発音用のトークンが返りませんでした" };
+    const sdk = await import("microsoft-cognitiveservices-speech-sdk");
+    if (mine !== run) return { ok: false, error: "採点を中断しました" };
+    const scored = await assessOnce(sdk, speechToken, region, sdk.AudioConfig.fromWavFileInput(file), reference, true);
+    if (mine !== run) return { ok: false, error: "採点を中断しました" };
+    state.pronSessionId = sessionId;
+    const recognized = scored.text || scored.words.map((word) => word.word).join(" ") || reference;
+    const saved = await storeAttempt({
+      mode: "read_aloud",
+      reference,
+      recognized,
+      words: scored.words,
+      scores: {
+        accuracy: scored.accuracy,
+        fluency: scored.fluency,
+        completeness: scored.completeness,
+        prosody: scored.prosody,
+        pronunciation: scored.pronunciation,
+      },
+      focus: null,
+      sample: false,
+    });
+    if (!saved) return { ok: false, error: "" };
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error && err.message ? err.message : "採点できませんでした";
+    return { ok: false, error: message };
+  }
+}
+
 export async function startPronunciation(): Promise<void> {
   if (state.pronPhase === "recording") return;
   const mode = state.pronMode;
@@ -152,22 +228,14 @@ export async function startPronunciation(): Promise<void> {
 
     const sdk = await import("microsoft-cognitiveservices-speech-sdk");
     if (mine !== run) return;
-    const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(speechToken, region);
-    speechConfig.speechRecognitionLanguage = "en-US";
-    speechConfig.outputFormat = sdk.OutputFormat.Detailed;
-    const audio = sdk.AudioConfig.fromDefaultMicrophoneInput();
-    const assessment = new sdk.PronunciationAssessmentConfig(
+    const scored = await assessOnce(
+      sdk,
+      speechToken,
+      region,
+      sdk.AudioConfig.fromDefaultMicrophoneInput(),
       mode === "read_aloud" ? reference : "",
-      sdk.PronunciationAssessmentGradingSystem.HundredMark,
-      sdk.PronunciationAssessmentGranularity.Phoneme,
       mode === "read_aloud",
     );
-    assessment.phonemeAlphabet = "IPA";
-    assessment.enableProsodyAssessment = true;
-    const rec = new sdk.SpeechRecognizer(speechConfig, audio);
-    assessment.applyTo(rec);
-    recognizer = rec;
-    const scored = await recognizeOnce(sdk, rec);
     if (mine !== run) return;
     const focus = mode === "read_aloud" ? (starterById(state.pronSentenceId)?.focus ?? null) : null;
     const recognized = scored.text || scored.words.map((word) => word.word).join(" ");
@@ -236,7 +304,7 @@ async function storeAttempt(input: {
   scores: ReturnType<typeof scoresFromWords>;
   focus: string | null;
   sample: boolean;
-}): Promise<void> {
+}): Promise<boolean> {
   const saved = await savePronunciation({
     mode: input.mode,
     reference_text: input.reference,
@@ -257,10 +325,11 @@ async function storeAttempt(input: {
     state.pronError = saved.error;
     emit();
     showToast(saved.error);
-    return;
+    return false;
   }
   state.pronLatestId = saved.id;
   state.highlightId = saved.id;
   emit();
   showToast(input.sample ? "見本の採点です。マイクは使っていません" : "採点を保存しました");
+  return true;
 }

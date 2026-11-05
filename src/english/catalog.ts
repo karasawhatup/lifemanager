@@ -10,7 +10,7 @@ import type {
 
 export const SPEAK_MINUTES = [5, 10, 15, 20] as const;
 export const DEFAULT_SPEAK_MINUTES = 10;
-export const REALTIME_MODEL = "gpt-realtime-2.1";
+export const GEMINI_MODEL = "gemini-3.8-flash";
 
 export const SCENARIOS: { id: SpeakingSession["scenario"]; label: string }[] = [
   { id: "free_talk", label: "フリートーク" },

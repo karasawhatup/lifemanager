@@ -6,7 +6,7 @@ project_id = "lifemanager"
 # ユーザートークンを通すため。各関数の中で auth.getUser によりログインを確認する。
 # 未ログインには 401 を返し、API キーは返さない。
 
-[functions.realtime-session]
+[functions.conversation-reply]
 verify_jwt = false
 
 [functions.speech-token]

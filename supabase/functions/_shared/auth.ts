@@ -41,11 +41,11 @@ export async function requireUser(req: Request): Promise<{ id: string } | Respon
   return { id: data.user.id };
 }
 
-export async function safetyId(userId: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(userId));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export function clipError(text: string): string {
-  return text.replace(/sk-[A-Za-z0-9_-]{8,}/g, "[hidden]").replace(/\s+/g, " ").trim().slice(0, 280);
+  return text
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[hidden]")
+    .replace(/AIza[0-9A-Za-z_-]{10,}/g, "[hidden]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 280);
 }

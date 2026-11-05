@@ -25,6 +25,7 @@ export type SpeakingLevel = "a2" | "b1" | "b2";
 export type TranscriptRole = "user" | "assistant";
 
 export type TranscriptLine = {
+  id?: string;
   role: TranscriptRole;
   text: string;
   at: string;
