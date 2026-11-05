@@ -133,7 +133,7 @@ API キーはブラウザにも `config.js` にもリポジトリにも置きま
 4. 秘密が空のまま実行すると、デプロイはせずに終わります。秘密を入れてから、もう一度 **Run workflow** します。
 5. 関数のファイルを `main` に push したときも、秘密が揃っていれば同じワークフローが動きます。
 
-ワークフローは [`.github/workflows/speaking-functions.yml`](../.github/workflows/speaking-functions.yml) です。Supabase CLI は GitHub Actions の中だけで動きます。
+ワークフローは [`.github/workflows/speaking-functions.yml`](../.github/workflows/speaking-functions.yml) です。Supabase CLI は GitHub Actions の中だけで動きます。ホストのプロジェクトを変えるコマンドは、Actions では確認の質問に答えられないので、ワークフローが `--yes` を付けて進めます。秘密の値はログに出しません。
 
 ### 7. 画面で試す
 
