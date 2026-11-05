@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check secrets
         id: secrets
@@ -58,9 +58,11 @@ jobs:
 
       - name: Setup Supabase CLI
         if: steps.secrets.outputs.ready == 'true'
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
-          version: latest
+          # CLI v3 asks before every hosted change and replaces --project-ref with --remote=<ref>.
+          # Stay on 3.x so those flags keep matching. v4 is expected to drop --project-ref.
+          version: "^3"
 
       - name: Set function secrets and deploy
         if: steps.secrets.outputs.ready == 'true'
@@ -72,13 +74,20 @@ jobs:
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
         run: |
           set -euo pipefail
+          # Hosted changes ask for confirmation. CI has no terminal, so each command passes --yes.
+          # --remote=<ref> is attached with = and placed last so it is not read as a command argument.
           supabase secrets set \
-            --project-ref "$SUPABASE_PROJECT_REF" \
             GEMINI_API_KEY="$GEMINI_API_KEY" \
             AZURE_SPEECH_KEY="$AZURE_SPEECH_KEY" \
-            AZURE_SPEECH_REGION="$AZURE_SPEECH_REGION"
-          supabase secrets unset OPENAI_API_KEY --project-ref "$SUPABASE_PROJECT_REF" || true
-          supabase functions delete realtime-session --project-ref "$SUPABASE_PROJECT_REF" --yes || true
-          supabase functions deploy conversation-reply --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy speech-token --project-ref "$SUPABASE_PROJECT_REF"
+            AZURE_SPEECH_REGION="$AZURE_SPEECH_REGION" \
+            --yes \
+            --remote="$SUPABASE_PROJECT_REF"
+          if ! supabase secrets unset OPENAI_API_KEY --yes --remote="$SUPABASE_PROJECT_REF"; then
+            echo "OPENAI_API_KEY は無いか、すでに削除済みです。デプロイは続けます。"
+          fi
+          if ! supabase functions delete realtime-session --yes --remote="$SUPABASE_PROJECT_REF"; then
+            echo "realtime-session は無いか、すでに削除済みです。デプロイは続けます。"
+          fi
+          supabase functions deploy conversation-reply --yes --remote="$SUPABASE_PROJECT_REF"
+          supabase functions deploy speech-token --yes --remote="$SUPABASE_PROJECT_REF"
           echo "conversation-reply と speech-token をデプロイしました。秘密の値はログに残していません。"
