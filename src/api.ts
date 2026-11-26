@@ -12,6 +12,8 @@ import type {
   ChangeRequest,
   Result,
   ScheduleBlock,
+  McpScope,
+  McpToken,
   Settings,
   Todo,
   TodoRank,
@@ -243,6 +245,7 @@ async function loadLive(): Promise<Result> {
     const created = await ensureSettings();
     if (!created.ok) return created;
   }
+  await loadMcpTokens();
   state.connected = true;
   return { ok: true };
 }
@@ -349,6 +352,9 @@ async function bootInner(): Promise<void> {
       state.requests = [];
       state.travels = [];
       state.settings = null;
+      state.mcpTokens = [];
+      state.mcpFreshToken = null;
+      state.mcpNotice = null;
       emit();
       return;
     }
@@ -399,6 +405,9 @@ export async function signOut(): Promise<void> {
   await supabase?.auth.signOut();
   state.email = null;
   state.authNotice = null;
+  state.mcpTokens = [];
+  state.mcpFreshToken = null;
+  state.mcpNotice = null;
 }
 
 export function resetDemoData(): void {
@@ -800,5 +809,124 @@ export async function saveSettings(input: Omit<Settings, "created_at" | "updated
     .single();
   if (error) return { ok: false, error: humanError(error) };
   state.settings = asSettings(data as Record<string, unknown>);
+  return { ok: true };
+}
+
+const MCP_TOKEN_COLUMNS = "id, label, token_prefix, scope, issued_via, revoked_at, last_used_at, created_at";
+
+function mcpTokenError(err: unknown): string {
+  const raw = err && typeof err === "object" && "message" in err ? String((err as { message: unknown }).message) : "";
+  console.error(err);
+  if (/schema cache|does not exist|mcp_access_tokens|PGRST|Could not find/i.test(raw)) {
+    return "AI接続の表がまだありません。supabase/mcp_tokens.sql を一度実行してください";
+  }
+  if (/mcp_access_tokens_label/i.test(raw)) return "名前は1〜80文字にしてください";
+  if (/JWT|session/i.test(raw)) return "ログインの期限が切れました。もう一度ログインしてください";
+  return "トークンを保存できませんでした。少し待ってからもう一度試してください";
+}
+
+function asMcpToken(row: Record<string, unknown>): McpToken {
+  return {
+    id: String(row.id),
+    label: String(row.label ?? ""),
+    token_prefix: String(row.token_prefix ?? ""),
+    scope: row.scope === "write" ? "write" : "read",
+    issued_via: row.issued_via === "oauth" ? "oauth" : "app",
+    revoked_at: row.revoked_at == null ? null : String(row.revoked_at),
+    last_used_at: row.last_used_at == null ? null : String(row.last_used_at),
+    created_at: String(row.created_at ?? ""),
+  };
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(buf)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (const byte of bytes) bin += String.fromCharCode(byte);
+  return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function newAccessToken(): string {
+  for (;;) {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const token = `lm_${base64Url(bytes)}`;
+    if (!token.startsWith("lmrt_") && !token.startsWith("lmoc_") && !token.startsWith("lmc_")) return token;
+  }
+}
+
+async function loadMcpTokens(): Promise<void> {
+  try {
+    const { data, error } = await client()
+      .from("mcp_access_tokens")
+      .select(MCP_TOKEN_COLUMNS)
+      .order("created_at", { ascending: false })
+      .limit(40);
+    if (error) {
+      state.mcpNotice = mcpTokenError(error);
+      state.mcpTokens = [];
+      return;
+    }
+    state.mcpNotice = null;
+    state.mcpTokens = ((data ?? []) as Record<string, unknown>[]).map(asMcpToken);
+  } catch (err) {
+    state.mcpNotice = mcpTokenError(err);
+    state.mcpTokens = [];
+  }
+}
+
+export async function createMcpToken(label: string, scope: McpScope): Promise<Result> {
+  const gated = guard();
+  if (!gated.ok) return gated;
+  if (state.mode !== "live") return { ok: false, error: "デモモードではトークンを作れません。ログインしてください" };
+  const name = label.trim();
+  if (name.length < 1 || name.length > 80) return { ok: false, error: "名前は1〜80文字にしてください" };
+  if (scope !== "read" && scope !== "write") return { ok: false, error: "権限を選び直してください" };
+  const active = state.mcpTokens.filter((token) => !token.revoked_at).length;
+  if (active >= 20) return { ok: false, error: "トークンは20個までです。古いものを取り消してください" };
+  const { data: userData, error: userError } = await client().auth.getUser();
+  if (userError || !userData.user) return { ok: false, error: "ログイン情報を確認できません" };
+  const token = newAccessToken();
+  const { data, error } = await client()
+    .from("mcp_access_tokens")
+    .insert({
+      owner_id: userData.user.id,
+      label: name,
+      token_prefix: token.slice(0, 12),
+      token_hash: await sha256Hex(token),
+      scope,
+    })
+    .select(MCP_TOKEN_COLUMNS)
+    .single();
+  if (error) return { ok: false, error: mcpTokenError(error) };
+  const saved = asMcpToken(data as Record<string, unknown>);
+  state.mcpTokens = [saved, ...state.mcpTokens.filter((item) => item.id !== saved.id)];
+  state.mcpFreshToken = token;
+  state.mcpNotice = null;
+  return { ok: true };
+}
+
+export function dismissMcpToken(): void {
+  state.mcpFreshToken = null;
+}
+
+export async function revokeMcpToken(id: string): Promise<Result> {
+  const gated = guard();
+  if (!gated.ok) return gated;
+  if (state.mode !== "live") return { ok: false, error: "デモモードでは取り消せません" };
+  const { data, error } = await client()
+    .from("mcp_access_tokens")
+    .update({ revoked_at: nowIso() })
+    .eq("id", id)
+    .is("revoked_at", null)
+    .select(MCP_TOKEN_COLUMNS)
+    .maybeSingle();
+  if (error) return { ok: false, error: mcpTokenError(error) };
+  if (!data) return { ok: false, error: "そのトークンはすでに取り消されています" };
+  const saved = asMcpToken(data as Record<string, unknown>);
+  state.mcpTokens = state.mcpTokens.map((token) => (token.id === saved.id ? saved : token));
   return { ok: true };
 }

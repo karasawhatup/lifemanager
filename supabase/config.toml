@@ -11,3 +11,7 @@ verify_jwt = false
 
 [functions.speech-token]
 verify_jwt = false
+
+# MCP は設定画面の個人トークンを関数の中で確認する。Supabase の JWT ではない。
+[functions.mcp]
+verify_jwt = false

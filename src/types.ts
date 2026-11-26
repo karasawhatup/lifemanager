@@ -97,6 +97,19 @@ export type TravelTime = {
   updated_at: string;
 };
 
+export type McpScope = "read" | "write";
+
+export type McpToken = {
+  id: string;
+  label: string;
+  token_prefix: string;
+  scope: McpScope;
+  issued_via: "app" | "oauth";
+  revoked_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+};
+
 export type Settings = {
   display_name: string;
   timezone: string;
