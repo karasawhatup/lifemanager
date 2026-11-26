@@ -1,14 +1,17 @@
 import {
   createBlock,
+  createMcpToken,
   createRequest,
   deleteBlock,
   deleteLog,
+  dismissMcpToken,
   deleteTodo,
   deleteTravel,
   deleteWish,
   logMark,
   reloadSilent,
   resetDemoData,
+  revokeMcpToken,
   saveSettings,
   saveTodo,
   saveTravel,
@@ -23,6 +26,7 @@ import {
 } from "./api";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { CATEGORIES, RANKS, WISH_CATEGORIES, categoryLabel, isCategory, statusLabel, wishCategoryLabel } from "./labels";
+import { readConfig } from "./config";
 import { emit, isScreen, state } from "./state";
 import {
   DAY_MINUTES,
@@ -175,7 +179,7 @@ function drawer(): string {
     { screen: "wishes", title: "小さなやりたいこと", sub: "食事、カラオケ、ゲーム" },
     { screen: "todos", title: "Todo", sub: "A・B・C", badge: openTodos },
     { screen: "travel", title: "移動時間", sub: "場所から場所へ" },
-    { screen: "settings", title: "設定", sub: "ログインと数字" },
+    { screen: "settings", title: "設定", sub: "ログインとAI接続" },
   ];
   return `<nav class="drawer${state.menuOpen ? " open" : ""}" id="drawer" ${state.menuOpen ? "" : "inert"}>
     <div class="drawer-top">
@@ -572,7 +576,11 @@ function travelPage(): string {
 }
 
 function settingsPage(): string {
-  return page("設定", "ログインと、ボットが読む数字", `${accountCard()}${state.settings ? settingsForm(state.settings) : ""}${installCard()}`);
+  return page(
+    "設定",
+    "ログイン、ボットの数字、AI接続",
+    `${accountCard()}${mcpCard()}${state.settings ? settingsForm(state.settings) : ""}${installCard()}`,
+  );
 }
 
 function accountCard(): string {
@@ -599,6 +607,56 @@ function accountCard(): string {
     ${state.authNotice ? `<p class="warn">${esc(state.authNotice)}</p>` : ""}
     <button type="button" class="btn ghost" data-action="reload">読み直す</button>
     <button type="button" class="btn ghost" data-action="sign-out">ログアウト</button>
+  </section>`;
+}
+
+function mcpCard(): string {
+  const cfg = readConfig();
+  const endpoint = cfg.live ? `${cfg.url.replace(/\/$/, "")}/functions/v1/mcp` : "";
+  if (state.mode === "demo" || !state.email) {
+    return `<section class="note"><p class="kicker">MCP</p>
+      <p>Claude、ChatGPT、Cursor から予定と英語学習を読み書きするトークンは、ログインしたあと、ここで作れます。Supabase の service_role キーは使いません。</p>
+      ${endpoint ? `<div class="readonly">${esc(endpoint)}</div>` : ""}
+    </section>`;
+  }
+  const fresh = state.mcpFreshToken
+    ? `<p class="warn">このトークンは今だけ表示します。設定を離れると、もう見られません。</p>
+      <div class="token-box" id="mcp-fresh">${esc(state.mcpFreshToken)}</div>
+      <button type="button" class="btn primary" data-action="copy-mcp-token">コピーする</button>
+      <button type="button" class="btn ghost" data-action="dismiss-mcp-token">閉じる</button>`
+    : "";
+  const rows = state.mcpTokens
+    .map((token) => {
+      const danger = `mcp:${token.id}`;
+      const when = token.last_used_at ? `最後 ${formatStamp(token.last_used_at)}` : "まだ使っていません";
+      const via = token.issued_via === "oauth" ? "外部接続" : "この画面";
+      const scope = token.scope === "write" ? "読み書き" : "読むだけ";
+      const revoked = token.revoked_at != null;
+      return `<div class="mcp-row${revoked ? " is-revoked" : ""}">
+        <div>
+          <div class="card-title">${esc(token.label)}</div>
+          <div class="card-meta">${esc(token.token_prefix)}… · ${scope} · ${via} · ${when}${revoked ? " · 取り消し済み" : ""}</div>
+        </div>
+        ${revoked ? "" : `<button type="button" class="text-btn danger" data-action="revoke-mcp-token" data-id="${esc(token.id)}" data-danger="${danger}">${state.pendingDelete === danger ? "本当に取り消す" : "取り消す"}</button>`}
+      </div>`;
+    })
+    .join("");
+  return `<section class="note"><p class="kicker">MCP</p>
+    <p>Claude、ChatGPT、Cursor に渡すトークンです。ここに全文が出るのは一度だけです。service_role キーは使いません。読み書きでも、削除は相手が confirm を付けたときだけです。</p>
+    ${endpoint ? `<div class="readonly">${esc(endpoint)}</div>` : ""}
+    ${state.mcpNotice ? `<p class="warn">${esc(state.mcpNotice)}</p>` : ""}
+    ${fresh}
+    <form data-form="mcp-token">
+      <label class="field"><span>名前</span><input id="mcp-label" maxlength="80" placeholder="Claude" required /></label>
+      <label class="field"><span>権限</span>
+        <select id="mcp-scope">
+          <option value="read">読むだけ</option>
+          <option value="write">読み書き</option>
+        </select>
+      </label>
+      <button class="btn primary" type="submit">トークンを作る</button>
+    </form>
+    ${rows}
   </section>`;
 }
 
@@ -663,6 +721,7 @@ async function onSubmit(kind: string): Promise<void> {
   if (kind === "travel") return saveTravelForm();
   if (kind === "settings") return saveSettingsForm();
   if (kind === "login") return loginForm();
+  if (kind === "mcp-token") return saveMcpTokenForm();
 }
 
 async function saveBlockForm(): Promise<void> {
@@ -797,6 +856,19 @@ async function saveSettingsForm(): Promise<void> {
   if (!result.ok) return showToast(result.error);
   emit();
   showToast("保存しました");
+}
+
+async function saveMcpTokenForm(): Promise<void> {
+  const label = value("mcp-label").trim();
+  const scope = value("mcp-scope");
+  if (!label || label.length > 80) return showToast("名前は1〜80文字にしてください");
+  if (scope !== "read" && scope !== "write") return showToast("権限を選び直してください");
+  setBusy(true);
+  const result = await createMcpToken(label, scope);
+  setBusy(false);
+  if (!result.ok) return showToast(result.error);
+  emit();
+  showToast("トークンを作りました。今だけ全文が見えます");
 }
 
 async function loginForm(): Promise<void> {
@@ -1114,6 +1186,34 @@ async function onAction(action: string, el: HTMLElement): Promise<void> {
   if (action === "reload") {
     await reloadSilent();
     showToast(state.connected ? "読み直しました" : "読み直せませんでした");
+    return;
+  }
+  if (action === "copy-mcp-token") {
+    const token = state.mcpFreshToken;
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      showToast("コピーしました");
+    } catch {
+      showToast("コピーできませんでした。トークンを長押しして選択してください");
+    }
+    return;
+  }
+  if (action === "dismiss-mcp-token") {
+    dismissMcpToken();
+    emit();
+    return;
+  }
+  if (action === "revoke-mcp-token") {
+    const id = el.dataset.id ?? "";
+    if (!armDelete(`mcp:${id}`)) return;
+    setBusy(true);
+    const result = await revokeMcpToken(id);
+    setBusy(false);
+    state.pendingDelete = null;
+    if (!result.ok) return showToast(result.error);
+    emit();
+    showToast("取り消しました");
   }
 }
 

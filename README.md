@@ -479,6 +479,18 @@ curl -s "$SUPABASE_URL/rest/v1/settings?owner_id=eq.$OWNER_ID&select=*" \
 | `open_change_requests` | `status=open` |
 | `open_todos` | `status=open` |
 
+## 外部の AI からつなぐ（MCP）
+
+Claude、ChatGPT、Cursor など、こちらのボット以外の AI から、予定と英語学習を読み書きできます。入口は1つです。
+
+```text
+https://oynfsgxgpsotvbqbpksl.supabase.co/functions/v1/mcp
+```
+
+AI に渡すのは、設定画面で作る個人トークンだけです。Supabase の `service_role` キーは渡しません。トークンは SHA-256 のハッシュだけを保存し、全文は作ったとき一度だけ表示します。権限は「読むだけ」と「読み書き」です。削除は、AI が `confirm: true` を付けたときだけ動きます。
+
+手順、Claude / ChatGPT / Cursor の設定例、デプロイに必要な GitHub の秘密は [docs/mcp.md](docs/mcp.md) です。
+
 ## ローカルで動かす
 
 Node.js 20 以降。

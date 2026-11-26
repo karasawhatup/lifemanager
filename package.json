@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && tsc --noEmit -p tsconfig.mcp.json && vite build",
+    "test": "node --experimental-strip-types --test mcp/server.test.ts",
+    "mcp": "node --experimental-strip-types mcp/stdio.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 4173"
   },
   "dependencies": {
